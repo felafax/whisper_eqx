@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import equinox as eqx
 from transformers import WhisperModel
-from main import WhisperModel as EqxModel  # Your Equinox model file
+from main import WhisperModel as EqxModel
 
 
 def convert_weights(hf_model, eqx_model):
@@ -140,7 +140,6 @@ def convert_weights(hf_model, eqx_model):
     # Convert decoder layers
     for layer_idx in range(len(hf_model.decoder.layers)):
         hf_layer = hf_model.decoder.layers[layer_idx]
-        eqx_layer = eqx_model.decoder.layers[layer_idx]
 
         # Self attention
         eqx_model = eqx.tree_at(
@@ -266,11 +265,13 @@ def test_equivalence():
 
     # Create test input
     batch_size = 1
-    seq_len = 3000
-    input_features = np.random.randn(batch_size, hf_model.config.num_mel_bins, seq_len)
-    decoder_input_ids = np.array([[50258, 50359]], dtype=np.int32)  # Common start tokens
+    seq_len = 1024
+    keys = jax.random.split(jax.random.PRNGKey(0), batch_size)
 
-    # Run Hugging Face model
+    input_features = np.random.randn(batch_size, hf_model.config.num_mel_bins, seq_len)
+    decoder_input_ids = np.array([[50258, 50359]], dtype=np.int32)
+    decoder_input_ids = np.broadcast_to(decoder_input_ids, (batch_size, 2))
+
     with torch.no_grad():
         hf_outputs = hf_model(
             torch.from_numpy(input_features).float(),
@@ -283,9 +284,7 @@ def test_equivalence():
     eqx_input = jnp.array(input_features.astype(np.float32))
     eqx_decoder_input = jnp.array(decoder_input_ids)
 
-    eqx_out = eqx.filter_vmap(eqx_model, in_axes=(0, 0, None))(
-        eqx_input, eqx_decoder_input, jax.random.PRNGKey(0)
-    )
+    eqx_out = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)
 
     # Compare outputs
     print("\nModel Output Comparison:")

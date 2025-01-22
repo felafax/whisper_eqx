@@ -301,7 +301,6 @@ class WhisperForConditionalGeneration(eqx.Module):
         self,
         input_features: Float[Array, "b f t"],
         decoder_input_ids: Int[Array, "b s"],
-        *,
         key,
     ) -> Float[Array, "b s v"]:
         decoder_out = self.model(input_features, decoder_input_ids, key=key)
