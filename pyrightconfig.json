@@ -1,0 +1,26 @@
+{
+  "venvPath": "/Users/neel/miniconda3/envs",
+  "venv": "react_jax",
+  "include": [
+    "./",
+    "./src/"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": "warning",
+  "pythonVersion": "3.11",
+  "strictListInference": true,
+  "strictDictionaryInference": true,
+  "strictSetInference": true,
+  "strictParameterNoneValue": true,
+  "reportImportCycles": "warning",
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+  "reportUnreachable": "warning",
+  "reportPrivateImportUsage": "none",
+  "typeCheckingMode": "standard"
+}
+
