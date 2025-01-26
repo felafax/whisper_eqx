@@ -1,16 +1,20 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import torch
 import numpy as np
-import equinox as eqx
+import torch
+from jaxtyping import Array
 from transformers import WhisperModel
+
 from main import WhisperModel as EqxModel
 
 
-def convert_weights(hf_model, eqx_model):
+def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Module:
     """Convert Hugging Face weights to Equinox model using proper immutable updates."""
-    def convert_param(hf_param):
-        return jnp.array(hf_param.detach().numpy().astype(np.float32))
+
+    def convert_param(hf_param: torch.Tensor) -> Array:
+        param_np = hf_param.detach().numpy()
+        return jnp.array(param_np.astype(np.float32))
 
     # Convert encoder components
     eqx_model = eqx.tree_at(
@@ -107,7 +111,7 @@ def convert_weights(hf_model, eqx_model):
         eqx_model = eqx.tree_at(
             lambda m: m.encoder.layers[layer_idx].ff.fc1.weight,
             eqx_model,
-            convert_param(hf_layer.fc1.weight)
+            convert_param(hf_layer.fc1.weight).T
         )
         eqx_model = eqx.tree_at(
             lambda m: m.encoder.layers[layer_idx].ff.fc1.bias,
@@ -117,7 +121,7 @@ def convert_weights(hf_model, eqx_model):
         eqx_model = eqx.tree_at(
             lambda m: m.encoder.layers[layer_idx].ff.fc2.weight,
             eqx_model,
-            convert_param(hf_layer.fc2.weight)
+            convert_param(hf_layer.fc2.weight).T
         )
         eqx_model = eqx.tree_at(
             lambda m: m.encoder.layers[layer_idx].ff.fc2.bias,
@@ -232,7 +236,7 @@ def convert_weights(hf_model, eqx_model):
         eqx_model = eqx.tree_at(
             lambda m: m.decoder.layers[layer_idx].ff.fc1.weight,
             eqx_model,
-            convert_param(hf_layer.fc1.weight)
+            convert_param(hf_layer.fc1.weight).T
         )
         eqx_model = eqx.tree_at(
             lambda m: m.decoder.layers[layer_idx].ff.fc1.bias,
@@ -242,7 +246,7 @@ def convert_weights(hf_model, eqx_model):
         eqx_model = eqx.tree_at(
             lambda m: m.decoder.layers[layer_idx].ff.fc2.weight,
             eqx_model,
-            convert_param(hf_layer.fc2.weight)
+            convert_param(hf_layer.fc2.weight).T
         )
         eqx_model = eqx.tree_at(
             lambda m: m.decoder.layers[layer_idx].ff.fc2.bias,
@@ -265,7 +269,7 @@ def test_equivalence():
 
     # Create test input
     batch_size = 1
-    seq_len = 1024
+    seq_len = 3000
     keys = jax.random.split(jax.random.PRNGKey(0), batch_size)
 
     input_features = np.random.randn(batch_size, hf_model.config.num_mel_bins, seq_len)
@@ -284,7 +288,7 @@ def test_equivalence():
     eqx_input = jnp.array(input_features.astype(np.float32))
     eqx_decoder_input = jnp.array(decoder_input_ids)
 
-    eqx_out = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)
+    eqx_out = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys) # type: ignore
 
     # Compare outputs
     print("\nModel Output Comparison:")
