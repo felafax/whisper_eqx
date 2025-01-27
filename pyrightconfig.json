@@ -2,7 +2,6 @@
   "venvPath": "/Users/neel/miniconda3/envs",
   "venv": "react_jax",
   "include": [
-    "./",
     "./src/"
   ],
   "exclude": [

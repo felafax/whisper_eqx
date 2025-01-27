@@ -57,26 +57,37 @@ class Linear(eqx.Module):
 
 
 class FeedForward(eqx.Module):
-    fc1: eqx.nn.Linear
-    fc2: eqx.nn.Linear
-    activation: Callable
+    fc1: Linear
+    fc2: Linear
     dropout: float
+    activation: Callable
 
     def __init__(
-        self, embed_dim: int, ff_dim: int, activation: str, dropout: float, *, key
+        self,
+        embed_dim: int,
+        ff_dim: int,
+        activation: str,
+        dropout: float,
+        key: PRNGKeyArray,
     ):
         super().__init__()
         key1, key2 = jax.random.split(key)
-        self.fc1 = eqx.nn.Linear(embed_dim, ff_dim, key=key1)
-        self.fc2 = eqx.nn.Linear(ff_dim, embed_dim, key=key2)
+
+        self.fc1 = Linear(embed_dim, ff_dim, key=key1)
+        self.fc2 = Linear(ff_dim, embed_dim, key=key2)
         self.activation = getattr(jax.nn, activation)
         self.dropout = dropout
 
-    def __call__(self, x: Float[Array, "b s d"], *, key) -> Float[Array, "b s d"]:
+        assert self.dropout == 0., 'Non-zero dropout provided.'
+
+    def __call__(self, x: Array, key: PRNGKeyArray) -> Array:
         x = jax.vmap(self.fc1)(x)
         x = self.activation(x)
+
+        x = eqx.nn.Dropout(self.dropout)(x, key=key)
         x = jax.vmap(self.fc2)(x)
-        return eqx.nn.Dropout(self.dropout)(x, key=key)
+
+        return x
 
 class MultiHeadAttention(eqx.Module):
     q_proj: Linear
@@ -95,7 +106,7 @@ class MultiHeadAttention(eqx.Module):
 
         keys = jax.random.split(key, 4)
         self.q_proj = Linear(embed_dim, embed_dim, use_bias=True, key=keys[0])
-        self.k_proj = Linear(embed_dim, embed_dim, use_bias=not is_decoder, key=keys[1])
+        self.k_proj = Linear(embed_dim, embed_dim, use_bias=is_decoder, key=keys[1])
         self.v_proj = Linear(embed_dim, embed_dim, use_bias=True, key=keys[2])
         self.out_proj = Linear(embed_dim, embed_dim, use_bias=True, key=keys[3])
 

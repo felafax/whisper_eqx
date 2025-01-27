@@ -1,13 +1,24 @@
 [project]
 name = "whisper-equinox"
 version = "0.1.0"
-description = "Add your description here"
+description = "Porting Whisper to equinox"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "basedpyright>=1.24.0",
     "equinox>=0.11.11",
     "jax>=0.5.0",
     "pdbpp>=0.10.3",
+    "ruff>=0.9.3",
     "torch>=2.5.1",
     "transformers>=4.48.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "whisper-equinox",
+]
+
+[tool.uv.sources]
+whisper-equinox = { workspace = true }

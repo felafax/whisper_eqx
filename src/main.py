@@ -6,8 +6,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from layers import FeedForward, MultiHeadAttention
-from utils import sinusoids
+from src.layers import FeedForward, Linear, MultiHeadAttention
+from src.utils import sinusoids
 
 # ruff: noqa: F722
 
@@ -35,14 +35,18 @@ class EncoderLayer(eqx.Module):
     final_layer_norm: eqx.nn.LayerNorm
     dropout: float
 
-    def __init__(self, config, *, key):
+    def __init__(self, config, *, key: PRNGKeyArray):
         super().__init__()
         key1, key2 = jax.random.split(key)
 
         self.self_attn = MultiHeadAttention(
             config.d_model, config.encoder_attention_heads, False, key=key1
         )
-        self.self_attn_layer_norm = eqx.nn.LayerNorm(config.d_model)
+
+        self.self_attn_layer_norm = eqx.nn.LayerNorm(
+            config.d_model, use_weight=True, use_bias=True
+        )
+
         self.ff = FeedForward(
             config.d_model,
             config.encoder_ffn_dim,
@@ -50,7 +54,11 @@ class EncoderLayer(eqx.Module):
             config.activation_dropout,
             key=key2,
         )
-        self.final_layer_norm = eqx.nn.LayerNorm(config.d_model)
+
+        self.final_layer_norm = eqx.nn.LayerNorm(
+            config.d_model, use_weight=True, use_bias=True
+        )
+
         self.dropout = config.dropout
 
     def __call__(
@@ -93,6 +101,7 @@ class WhisperEncoder(eqx.Module):
             in_channels=config.num_mel_bins,
             out_channels=config.d_model,
             kernel_size=3,
+            stride=1,
             padding=1,
             key=keys[0],
         )
@@ -106,7 +115,6 @@ class WhisperEncoder(eqx.Module):
             key=keys[1],
         )
 
-        # Positional embeddings (learnable)
         self.embed_positions = eqx.nn.Embedding(
             config.max_source_positions, config.d_model, key=keys[2]
         )
@@ -123,32 +131,33 @@ class WhisperEncoder(eqx.Module):
             for k in jax.random.split(keys[3], config.encoder_layers)
         ]
 
-        self.layer_norm = eqx.nn.LayerNorm(config.d_model)
+        self.layer_norm = eqx.nn.LayerNorm(
+            config.d_model, use_weight=True, use_bias=True
+        )
+
         self.dropout = config.dropout
 
     def __call__(
         self,
         input_features: Float[Array, "c t"],  # [channels, time]
-        *,
         key: PRNGKeyArray,
     ) -> Float[Array, "t d"]:
         key1, key2 = jax.random.split(key)
 
-        x = jax.nn.gelu(self.conv1(input_features))  # [time, d_model]
-        x = jax.nn.gelu(self.conv2(x))  # [time//2, d_model]
+        input_embeds = jax.nn.gelu(self.conv1(input_features))  # [time, d_model]
+        input_embeds = jax.nn.gelu(self.conv2(input_embeds))  # [time//2, d_model]
+        input_embeds = input_embeds
 
         # Add positional embeddings
-        positions = jax.vmap(self.embed_positions)(
-            jnp.arange(x.shape[1], dtype=jnp.int32)
-        )
+        positions = self.embed_positions.weight
 
-        x = x + positions.T
-        x: Array = eqx.nn.Dropout(self.dropout)(x, key=key1).T
+        input_embeds = input_embeds + positions.T
+        input_embeds: Array = eqx.nn.Dropout(self.dropout)(input_embeds, key=key1).T
 
         for layer in self.layers:
-            x = layer(x, attn_mask=None, key=key2)
+            input_embeds = layer(input_embeds, attn_mask=None, key=key2)
 
-        return jax.vmap(self.layer_norm)(x)
+        return jax.vmap(self.layer_norm)(input_embeds)
 
 
 class DecoderLayer(eqx.Module):
@@ -168,12 +177,12 @@ class DecoderLayer(eqx.Module):
             config.d_model, config.decoder_attention_heads, True, key=keys[0]
         )
 
-        self.self_attn_layer_norm = eqx.nn.LayerNorm(config.d_model)
+        self.self_attn_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
         self.encoder_attn = MultiHeadAttention(
             config.d_model, config.decoder_attention_heads, True, key=keys[1]
         )
 
-        self.encoder_attn_layer_norm = eqx.nn.LayerNorm(config.d_model)
+        self.encoder_attn_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
         self.ff = FeedForward(
             config.d_model,
             config.decoder_ffn_dim,
@@ -182,7 +191,7 @@ class DecoderLayer(eqx.Module):
             key=keys[2],
         )
 
-        self.final_layer_norm = eqx.nn.LayerNorm(config.d_model)
+        self.final_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
         self.dropout = config.dropout
 
     def __call__(
@@ -240,7 +249,7 @@ class WhisperDecoder(eqx.Module):
             DecoderLayer(config, key=k)
             for k in jax.random.split(keys[1], config.decoder_layers)
         ]
-        self.layer_norm = eqx.nn.LayerNorm(config.d_model)
+        self.layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
         self.dropout = config.dropout
 
     def __call__(
@@ -288,12 +297,12 @@ class WhisperModel(eqx.Module):
 
 class WhisperForConditionalGeneration(eqx.Module):
     model: WhisperModel
-    proj_out: eqx.nn.Linear
+    proj_out: Linear
 
     def __init__(self, config, *, key):
         model_key, proj_key = jax.random.split(key)
         self.model = WhisperModel(config, key=model_key)
-        self.proj_out = eqx.nn.Linear(
+        self.proj_out = Linear(
             config.d_model, config.vocab_size, use_bias=False, key=proj_key
         )
 
