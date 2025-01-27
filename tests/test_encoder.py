@@ -105,7 +105,7 @@ def test_ffn_output(models, layer_idx: int):
         hf_out = hf_layer.fc2(hf_layer.fc1(dummy_input))
     
     # Equinox forward
-    eq_out = eq_layer.ff.fc2(eq_layer.ff.fc1(jnp.array(dummy_input.numpy())))
+    eq_out = eq_layer.fc2(eq_layer.fc1(jnp.array(dummy_input.numpy())))
     
     diff(eq_out, hf_out, f"layer {layer_idx} FFN output")
 
@@ -188,7 +188,7 @@ def test_ffn(models, layer_idx: int):
     dummy_input = torch.randn(10, 384)
 
     hf_ff = hf_model.encoder.layers[layer_idx].fc1
-    eq_ff = eqx_encoder.layers[layer_idx].ff.fc1
+    eq_ff = eqx_encoder.layers[layer_idx].fc1
 
     hf_out = hf_ff(dummy_input)
     eq_out = eq_ff(jnp.array(dummy_input.numpy()))
@@ -198,7 +198,9 @@ def test_ffn(models, layer_idx: int):
 
 def test_full_encoder(models):
     hf_model, eqx_encoder = models
-    dummy_input = torch.randn(1, 80, 3000)  # [num_mel_bins, time]
+
+    np.random.seed(0)
+    dummy_input = torch.from_numpy(np.random.randn(1, 80, 3000).astype(np.float32))  # [num_mel_bins, time]
 
     hf_out = hf_model.encoder(dummy_input).last_hidden_state
     eq_out = eqx_encoder(jnp.array(dummy_input.numpy().squeeze()), key=KEY)[None, ...]

@@ -31,13 +31,14 @@ class SinusoidalPositionalEmbedding(eqx.Module):
 class EncoderLayer(eqx.Module):
     self_attn: MultiHeadAttention
     self_attn_layer_norm: eqx.nn.LayerNorm
-    ff: FeedForward
+    fc1: Linear
+    fc2: Linear
     final_layer_norm: eqx.nn.LayerNorm
     dropout: float
 
     def __init__(self, config, *, key: PRNGKeyArray):
         super().__init__()
-        key1, key2 = jax.random.split(key)
+        key1, key2, key3 = jax.random.split(key, 3)
 
         self.self_attn = MultiHeadAttention(
             config.d_model, config.encoder_attention_heads, False, key=key1
@@ -47,12 +48,16 @@ class EncoderLayer(eqx.Module):
             config.d_model, use_weight=True, use_bias=True
         )
 
-        self.ff = FeedForward(
+        self.fc1 = Linear(
             config.d_model,
             config.encoder_ffn_dim,
-            config.activation_function,
-            config.activation_dropout,
             key=key2,
+        )
+
+        self.fc2 = Linear(
+            config.encoder_ffn_dim,
+            config.d_model,
+            key=key3,
         )
 
         self.final_layer_norm = eqx.nn.LayerNorm(
@@ -68,7 +73,7 @@ class EncoderLayer(eqx.Module):
         *,
         key,
     ) -> Float[Array, "s d"]:
-        keys = jax.random.split(key, 2)
+        keys = jax.random.split(key, 3)
 
         residual = x
         x = jax.vmap(self.self_attn_layer_norm)(x)
@@ -77,8 +82,11 @@ class EncoderLayer(eqx.Module):
         x = residual + x
 
         residual = x
+
         x = jax.vmap(self.final_layer_norm)(x)
-        x = self.ff(x, key=keys[1])
+        x = jax.nn.gelu(self.fc1(x))
+        x = eqx.nn.Dropout(self.dropout)(x, key=keys[1])
+        x = self.fc2(x)
         x = residual + x
 
         return x
@@ -146,18 +154,17 @@ class WhisperEncoder(eqx.Module):
 
         input_embeds = jax.nn.gelu(self.conv1(input_features))  # [time, d_model]
         input_embeds = jax.nn.gelu(self.conv2(input_embeds))  # [time//2, d_model]
-        input_embeds = input_embeds
 
         # Add positional embeddings
         positions = self.embed_positions.weight
 
-        input_embeds = input_embeds + positions.T
-        input_embeds: Array = eqx.nn.Dropout(self.dropout)(input_embeds, key=key1).T
+        hidden_states = input_embeds.T + positions
+        hidden_states = eqx.nn.Dropout(self.dropout)(hidden_states, key=key1)
 
-        for layer in self.layers:
-            input_embeds = layer(input_embeds, attn_mask=None, key=key2)
+        for idx, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states, attn_mask=None, key=key2)
 
-        return jax.vmap(self.layer_norm)(input_embeds)
+        return jax.vmap(self.layer_norm)(hidden_states)
 
 
 class DecoderLayer(eqx.Module):
@@ -165,13 +172,14 @@ class DecoderLayer(eqx.Module):
     self_attn_layer_norm: eqx.nn.LayerNorm
     encoder_attn: MultiHeadAttention
     encoder_attn_layer_norm: eqx.nn.LayerNorm
-    ff: FeedForward
+    fc1: Linear
+    fc2: Linear
     final_layer_norm: eqx.nn.LayerNorm
     dropout: float
 
     def __init__(self, config, *, key):
         super().__init__()
-        keys = jax.random.split(key, 3)
+        keys = jax.random.split(key, 4)
 
         self.self_attn = MultiHeadAttention(
             config.d_model, config.decoder_attention_heads, True, key=keys[0]
@@ -183,12 +191,17 @@ class DecoderLayer(eqx.Module):
         )
 
         self.encoder_attn_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
-        self.ff = FeedForward(
+
+        self.fc1 = Linear(
             config.d_model,
             config.decoder_ffn_dim,
-            config.activation_function,
-            config.activation_dropout,
             key=keys[2],
+        )
+
+        self.fc2 = Linear(
+            config.decoder_ffn_dim,
+            config.d_model,
+            key=keys[3],
         )
 
         self.final_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
@@ -222,7 +235,10 @@ class DecoderLayer(eqx.Module):
 
         residual = x
         x = jax.vmap(self.final_layer_norm)(x)
-        x = self.ff(x, key=keys[2])
+        x = jax.nn.gelu(self.fc1(x))
+        x = eqx.nn.Dropout(self.dropout)(x, key=keys[2])
+        x = self.fc2(x)
+
         x = residual + x
 
         return x, self_attn, cross_attn

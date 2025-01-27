@@ -65,6 +65,18 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
         ),
     )
 
+    eqx_model = eqx.tree_at(
+        lambda m: m.encoder.layer_norm.weight,
+        eqx_model,
+        process_param(hf_model.encoder.layer_norm.weight, "encoder.layer_norm.weight"),
+    )
+
+    eqx_model = eqx.tree_at(
+        lambda m: m.encoder.layer_norm.bias,
+        eqx_model,
+        process_param(hf_model.encoder.layer_norm.bias, "encoder.layer_norm.bias"),
+    )
+
     # Encoder layers
     for layer_idx in range(len(hf_model.encoder.layers)):
         hf_layer = hf_model.encoder.layers[layer_idx]
@@ -156,24 +168,24 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
 
         # Feed forward
         eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].ff.fc1.weight,
+            lambda m: m.encoder.layers[layer_idx].fc1.weight,
             eqx_model,
-            process_param(hf_layer.fc1.weight, f"{base_path}.ff.fc1.weight"),
+            process_param(hf_layer.fc1.weight, f"{base_path}.fc1.weight"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].ff.fc1.bias,
+            lambda m: m.encoder.layers[layer_idx].fc1.bias,
             eqx_model,
-            process_param(hf_layer.fc1.bias, f"{base_path}.ff.fc1.bias"),
+            process_param(hf_layer.fc1.bias, f"{base_path}.fc1.bias"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].ff.fc2.weight,
+            lambda m: m.encoder.layers[layer_idx].fc2.weight,
             eqx_model,
-            process_param(hf_layer.fc2.weight, f"{base_path}.ff.fc2.weight"),
+            process_param(hf_layer.fc2.weight, f"{base_path}.fc2.weight"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].ff.fc2.bias,
+            lambda m: m.encoder.layers[layer_idx].fc2.bias,
             eqx_model,
-            process_param(hf_layer.fc2.bias, f"{base_path}.ff.fc2.bias"),
+            process_param(hf_layer.fc2.bias, f"{base_path}.fc2.bias"),
         )
 
     # Decoder components
@@ -331,24 +343,24 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
 
         # Feed forward
         eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].ff.fc1.weight,
+            lambda m: m.decoder.layers[layer_idx].fc1.weight,
             eqx_model,
-            process_param(hf_layer.fc1.weight, f"{base_path}.ff.fc1.weight"),
+            process_param(hf_layer.fc1.weight, f"{base_path}.fc1.weight"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].ff.fc1.bias,
+            lambda m: m.decoder.layers[layer_idx].fc1.bias,
             eqx_model,
-            process_param(hf_layer.fc1.bias, f"{base_path}.ff.fc1.bias"),
+            process_param(hf_layer.fc1.bias, f"{base_path}.fc1.bias"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].ff.fc2.weight,
+            lambda m: m.decoder.layers[layer_idx].fc2.weight,
             eqx_model,
-            process_param(hf_layer.fc2.weight, f"{base_path}.ff.fc2.weight"),
+            process_param(hf_layer.fc2.weight, f"{base_path}.fc2.weight"),
         )
         eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].ff.fc2.bias,
+            lambda m: m.decoder.layers[layer_idx].fc2.bias,
             eqx_model,
-            process_param(hf_layer.fc2.bias, f"{base_path}.ff.fc2.bias"),
+            process_param(hf_layer.fc2.bias, f"{base_path}.fc2.bias"),
         )
 
     return eqx_model
