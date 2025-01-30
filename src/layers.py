@@ -116,7 +116,6 @@ class MultiHeadAttention(eqx.Module):
         key_value_states: Optional[Float[Array, "s_kv d"]] = None,
         attention_mask: Optional[Float[Array, "1 s_q s_kv"]] = None,
     ) -> Tuple[Float[Array, "s_q d"], Float[Array, "h s_q s_kv"]]:
-        # Project inputs to query/key/value
         k_input = key_value_states if key_value_states is not None else hidden_states
         q = self.q_proj(hidden_states) * self.scale
         k = self.k_proj(k_input)
@@ -141,9 +140,7 @@ class MultiHeadAttention(eqx.Module):
 
         # Apply attention mask (if provided)
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask.squeeze(
-                0
-            )  # [s_q, s_kv] -> [h, s_q, s_kv]
+            attn_weights = attn_weights + attention_mask
 
         # Softmax and attention output
         attn_probs = jax.nn.softmax(attn_weights, axis=-1)

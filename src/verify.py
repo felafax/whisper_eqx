@@ -9,314 +9,192 @@ from transformers import WhisperModel
 from src.main import WhisperModel as EqxModel
 
 
+def parse_path(path_str):
+    parts = []
+    for component in path_str.split("."):
+        if "[" in component and component.endswith("]"):
+            attr_part, index_part = component.split("[")
+            index = int(index_part[:-1])
+            parts.append(attr_part)
+            parts.append(index)
+        else:
+            parts.append(component)
+    return parts
+
+
+def get_hf_param(hf_model, path_str):
+    parts = parse_path(path_str)
+    current = hf_model
+    for part in parts:
+        if isinstance(part, int):
+            current = current[part]
+        else:
+            current = getattr(current, part)
+    return current
+
+
+def create_where_func(path_str):
+    parts = parse_path(path_str)
+
+    def where_func(model):
+        current = model
+        for part in parts:
+            if isinstance(part, int):
+                current = current[part]
+            else:
+                current = getattr(current, part)
+        return current
+
+    return where_func
+
+
+def process_param(hf_param: torch.Tensor, path: str) -> Array:
+    param_np = hf_param.detach().numpy().astype(np.float32)
+    param_jax = jnp.array(param_np)
+
+    # Transpose linear layers (FFN and MHA projections)
+    if any(
+        key in path
+        for key in [
+            "fc1.weight",
+            "fc2.weight",
+            "q_proj.weight",
+            "k_proj.weight",
+            "v_proj.weight",
+            "out_proj.weight",
+        ]
+    ):
+        param_jax = param_jax.T
+
+    # Unsqueeze encoder conv biases (Equinox expects shape [out_channels, 1])
+    if ("conv1.bias" in path or "conv2.bias" in path) and "encoder" in path:
+        param_jax = jnp.expand_dims(param_jax, axis=-1)
+
+    return param_jax
+
+
+def update_param(eqx_model, hf_model, path_str):
+    where = create_where_func(path_str)
+    hf_param = get_hf_param(hf_model, path_str)
+    new_param = process_param(hf_param, path_str)
+    return eqx.tree_at(where, eqx_model, new_param)
+
+
 def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Module:
     """Convert Hugging Face weights to Equinox model using path-based transformations."""
 
-    def process_param(hf_param: torch.Tensor, path: str) -> Array:
-        param_np = hf_param.detach().numpy().astype(np.float32)
-        param_jax = jnp.array(param_np)
-
-        # Transpose linear layers (FFN and MHA projections)
-        if any(
-            key in path
-            for key in [
-                "fc1.weight",
-                "fc2.weight",
-                "q_proj.weight",
-                "k_proj.weight",
-                "v_proj.weight",
-                "out_proj.weight",
-            ]
-        ):
-            param_jax = param_jax.T
-
-        # Unsqueeze encoder conv biases (Equinox expects shape [out_channels, 1])
-        if ("conv1.bias" in path or "conv2.bias" in path) and "encoder" in path:
-            param_jax = jnp.expand_dims(param_jax, axis=-1)
-
-        return param_jax
-
     # Encoder components
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.conv1.weight,
-        eqx_model,
-        process_param(hf_model.encoder.conv1.weight, "encoder.conv1.weight"),
-    )
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.conv1.bias,
-        eqx_model,
-        process_param(hf_model.encoder.conv1.bias, "encoder.conv1.bias"),
-    )
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.conv2.weight,
-        eqx_model,
-        process_param(hf_model.encoder.conv2.weight, "encoder.conv2.weight"),
-    )
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.conv2.bias,
-        eqx_model,
-        process_param(hf_model.encoder.conv2.bias, "encoder.conv2.bias"),
-    )
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.embed_positions.weight,
-        eqx_model,
-        process_param(
-            hf_model.encoder.embed_positions.weight, "encoder.embed_positions.weight"
-        ),
-    )
-
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.layer_norm.weight,
-        eqx_model,
-        process_param(hf_model.encoder.layer_norm.weight, "encoder.layer_norm.weight"),
-    )
-
-    eqx_model = eqx.tree_at(
-        lambda m: m.encoder.layer_norm.bias,
-        eqx_model,
-        process_param(hf_model.encoder.layer_norm.bias, "encoder.layer_norm.bias"),
-    )
+    eqx_model = update_param(eqx_model, hf_model, "encoder.conv1.weight")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.conv1.bias")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.conv2.weight")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.conv2.bias")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.embed_positions.weight")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.layer_norm.weight")
+    eqx_model = update_param(eqx_model, hf_model, "encoder.layer_norm.bias")
 
     # Encoder layers
     for layer_idx in range(len(hf_model.encoder.layers)):
-        hf_layer = hf_model.encoder.layers[layer_idx]
-        base_path = f"encoder.layers.{layer_idx}"
+        base_path = f"encoder.layers[{layer_idx}]"
 
         # Self attention
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "q_proj").weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.q_proj.weight, f"{base_path}.self_attn.q_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.q_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "q_proj").bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.q_proj.bias, f"{base_path}.self_attn.q_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.q_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "k_proj").weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.k_proj.weight, f"{base_path}.self_attn.k_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.k_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "v_proj").weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.v_proj.weight, f"{base_path}.self_attn.v_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.v_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "v_proj").bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.v_proj.bias, f"{base_path}.self_attn.v_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.v_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "out_proj").weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.out_proj.weight,
-                f"{base_path}.self_attn.out_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.out_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: getattr(m.encoder.layers[layer_idx].self_attn, "out_proj").bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.out_proj.bias, f"{base_path}.self_attn.out_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.out_proj.bias"
         )
 
         # Layer norms
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].self_attn_layer_norm.weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn_layer_norm.weight,
-                f"{base_path}.self_attn_layer_norm.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn_layer_norm.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].self_attn_layer_norm.bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn_layer_norm.bias,
-                f"{base_path}.self_attn_layer_norm.bias",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn_layer_norm.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].final_layer_norm.weight,
-            eqx_model,
-            process_param(
-                hf_layer.final_layer_norm.weight, f"{base_path}.final_layer_norm.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.final_layer_norm.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].final_layer_norm.bias,
-            eqx_model,
-            process_param(
-                hf_layer.final_layer_norm.bias, f"{base_path}.final_layer_norm.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.final_layer_norm.bias"
         )
 
         # Feed forward
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].fc1.weight,
-            eqx_model,
-            process_param(hf_layer.fc1.weight, f"{base_path}.fc1.weight"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].fc1.bias,
-            eqx_model,
-            process_param(hf_layer.fc1.bias, f"{base_path}.fc1.bias"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].fc2.weight,
-            eqx_model,
-            process_param(hf_layer.fc2.weight, f"{base_path}.fc2.weight"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.encoder.layers[layer_idx].fc2.bias,
-            eqx_model,
-            process_param(hf_layer.fc2.bias, f"{base_path}.fc2.bias"),
-        )
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc1.weight")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc1.bias")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc2.weight")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc2.bias")
 
     # Decoder components
-    eqx_model = eqx.tree_at(
-        lambda m: m.decoder.embed_tokens.weight,
-        eqx_model,
-        process_param(
-            hf_model.decoder.embed_tokens.weight, "decoder.embed_tokens.weight"
-        ),
-    )
-    eqx_model = eqx.tree_at(
-        lambda m: m.decoder.embed_positions.weight,
-        eqx_model,
-        process_param(
-            hf_model.decoder.embed_positions.weight, "decoder.embed_positions.weight"
-        ),
-    )
+    eqx_model = update_param(eqx_model, hf_model, "decoder.embed_tokens.weight")
+    eqx_model = update_param(eqx_model, hf_model, "decoder.embed_positions.weight")
+
+    # Decoder `layer_norm` at the end
+    eqx_model = update_param(eqx_model, hf_model, "decoder.layer_norm.weight")
+    eqx_model = update_param(eqx_model, hf_model, "decoder.layer_norm.bias")
 
     # Decoder layers
     for layer_idx in range(len(hf_model.decoder.layers)):
-        hf_layer = hf_model.decoder.layers[layer_idx]
-        base_path = f"decoder.layers.{layer_idx}"
+        base_path = f"decoder.layers[{layer_idx}]"
 
         # Self attention
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.q_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.q_proj.weight, f"{base_path}.self_attn.q_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.q_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.q_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.q_proj.bias, f"{base_path}.self_attn.q_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.q_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.k_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.k_proj.weight, f"{base_path}.self_attn.k_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.k_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.v_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.v_proj.weight, f"{base_path}.self_attn.v_proj.weight"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.v_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.v_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.v_proj.bias, f"{base_path}.self_attn.v_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.v_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.out_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.out_proj.weight,
-                f"{base_path}.self_attn.out_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.out_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].self_attn.out_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.self_attn.out_proj.bias, f"{base_path}.self_attn.out_proj.bias"
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.self_attn.out_proj.bias"
         )
 
         # Cross attention
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.q_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.q_proj.weight,
-                f"{base_path}.encoder_attn.q_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.q_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.q_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.q_proj.bias,
-                f"{base_path}.encoder_attn.q_proj.bias",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.q_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.k_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.k_proj.weight,
-                f"{base_path}.encoder_attn.k_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.k_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.v_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.v_proj.weight,
-                f"{base_path}.encoder_attn.v_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.v_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.v_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.v_proj.bias,
-                f"{base_path}.encoder_attn.v_proj.bias",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.v_proj.bias"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.out_proj.weight,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.out_proj.weight,
-                f"{base_path}.encoder_attn.out_proj.weight",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.out_proj.weight"
         )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].encoder_attn.out_proj.bias,
-            eqx_model,
-            process_param(
-                hf_layer.encoder_attn.out_proj.bias,
-                f"{base_path}.encoder_attn.out_proj.bias",
-            ),
+        eqx_model = update_param(
+            eqx_model, hf_model, f"{base_path}.encoder_attn.out_proj.bias"
         )
 
         # Layer norms
@@ -325,43 +203,18 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
             "encoder_attn_layer_norm",
             "final_layer_norm",
         ]:
-            eqx_model = eqx.tree_at(
-                lambda m: getattr(m.decoder.layers[layer_idx], norm_type).weight,
-                eqx_model,
-                process_param(
-                    getattr(hf_layer, norm_type).weight,
-                    f"{base_path}.{norm_type}.weight",
-                ),
+            eqx_model = update_param(
+                eqx_model, hf_model, f"{base_path}.{norm_type}.weight"
             )
-            eqx_model = eqx.tree_at(
-                lambda m: getattr(m.decoder.layers[layer_idx], norm_type).bias,
-                eqx_model,
-                process_param(
-                    getattr(hf_layer, norm_type).bias, f"{base_path}.{norm_type}.bias"
-                ),
+            eqx_model = update_param(
+                eqx_model, hf_model, f"{base_path}.{norm_type}.bias"
             )
 
         # Feed forward
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].fc1.weight,
-            eqx_model,
-            process_param(hf_layer.fc1.weight, f"{base_path}.fc1.weight"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].fc1.bias,
-            eqx_model,
-            process_param(hf_layer.fc1.bias, f"{base_path}.fc1.bias"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].fc2.weight,
-            eqx_model,
-            process_param(hf_layer.fc2.weight, f"{base_path}.fc2.weight"),
-        )
-        eqx_model = eqx.tree_at(
-            lambda m: m.decoder.layers[layer_idx].fc2.bias,
-            eqx_model,
-            process_param(hf_layer.fc2.bias, f"{base_path}.fc2.bias"),
-        )
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc1.weight")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc1.bias")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc2.weight")
+        eqx_model = update_param(eqx_model, hf_model, f"{base_path}.fc2.bias")
 
     return eqx_model
 
@@ -376,7 +229,7 @@ def test_equivalence():
     )
 
     eqx_model = EqxModel(hf_model.config, key=jax.random.PRNGKey(0))
-    
+
     # Perform weight conversion
     eqx_model = convert_weights(hf_model, eqx_model)
 

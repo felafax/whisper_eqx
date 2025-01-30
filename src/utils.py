@@ -22,5 +22,5 @@ def shift_tokens_right(
     shifted = jnp.where(shifted == -100, pad_token_id, shifted)
     return shifted
 
-def causal_mask(seq_len: int) -> Float[Array, "1 1 s s"]:
-    return jnp.tril(jnp.ones((1, 1, seq_len, seq_len)))
+def causal_mask(seq_len: int) -> Float[Array, "1 1 s t"]:
+    return jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1) * jnp.finfo(jnp.float32).min

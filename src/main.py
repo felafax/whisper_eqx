@@ -161,7 +161,7 @@ class WhisperEncoder(eqx.Module):
         hidden_states = input_embeds.T + positions
         hidden_states = eqx.nn.Dropout(self.dropout)(hidden_states, key=key1)
 
-        for idx, layer in enumerate(self.layers):
+        for layer in self.layers:
             hidden_states = layer(hidden_states, attn_mask=None, key=key2)
 
         return jax.vmap(self.layer_norm)(hidden_states)
@@ -182,10 +182,11 @@ class DecoderLayer(eqx.Module):
         keys = jax.random.split(key, 4)
 
         self.self_attn = MultiHeadAttention(
-            config.d_model, config.decoder_attention_heads, True, key=keys[0]
+            config.d_model, config.decoder_attention_heads, False, key=keys[0]
         )
 
         self.self_attn_layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
+
         self.encoder_attn = MultiHeadAttention(
             config.d_model, config.decoder_attention_heads, True, key=keys[1]
         )
@@ -213,12 +214,12 @@ class DecoderLayer(eqx.Module):
         encoder_hidden_states: Float[Array, "s d"],
         self_attn_mask: Optional[Float[Array, "1 s s"]],
         cross_attn_mask: Optional[Float[Array, "1 s s"]],
-        *,
-        key,
+        key: PRNGKeyArray,
     ) -> Tuple[Float[Array, "s d"], Float[Array, "h s s"], Float[Array, "h s s"]]:
         keys = jax.random.split(key, 3)
 
         residual = x
+
         x = jax.vmap(self.self_attn_layer_norm)(x)
         x, self_attn = self.self_attn(x, attention_mask=self_attn_mask)
         x = eqx.nn.Dropout(self.dropout)(x, key=keys[0])
@@ -234,6 +235,7 @@ class DecoderLayer(eqx.Module):
         x = residual + x
 
         residual = x
+
         x = jax.vmap(self.final_layer_norm)(x)
         x = jax.nn.gelu(self.fc1(x))
         x = eqx.nn.Dropout(self.dropout)(x, key=keys[2])
@@ -278,7 +280,7 @@ class WhisperDecoder(eqx.Module):
     ) -> Float[Array, "s d"]:
         keys = jax.random.split(key, 2)
 
-        # Direct embedding without vmap
+        # Embed tokens and positions
         x = jax.vmap(self.embed_tokens)(input_ids)  # [s] -> [s, d]
         positions = self.embed_positions.weight[: x.shape[0]]  # [s, d]
         x = x + positions
