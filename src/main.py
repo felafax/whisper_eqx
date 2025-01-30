@@ -336,6 +336,12 @@ class WhisperForConditionalGeneration(eqx.Module):
 
 
 class DecoderLayerWithCache(eqx.Module):
+    """
+    I dont expect this to work. This is just here to guide KV-caching impl.
+    On a cursory glance, it appears to roll its own cache instead of using
+    equinox's Stateful API so I'm skeptical.
+    """
+
     self_attn: MultiHeadAttention
     self_attn_layer_norm: eqx.nn.LayerNorm
     encoder_attn: MultiHeadAttention

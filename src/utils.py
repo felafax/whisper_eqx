@@ -2,10 +2,12 @@ import math
 import numpy as np
 import jax.numpy as jnp
 import termplotlib as tpl
+
 from jaxtyping import Array, Float, Int
+from typing import Callable
+from torch import Tensor
 
 # ruff: noqa: F722
-
 
 def sinusoids(length: int, channels: int) -> Float[Array, "length channels"]:
     """Sinusoidal positional embeddings."""
@@ -31,7 +33,22 @@ def causal_mask(seq_len: int) -> Float[Array, "1 1 s t"]:
         jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1) * jnp.finfo(jnp.float32).min
     )
 
+def ascii_hist(x: Array, bins: int = 10):
+    n, xedges = np.histogram(x, bins=bins)
+    max_n = n.max()
+    bar_width = 50
+    if max_n > 0:
+        normed_n = n / max_n
+    else:
+        normed_n = n  # Avoid division by zero if max_n is zero
 
+    for i in range(len(n)):
+        bar = "#" * int(normed_n[i] * bar_width)
+        bin_center = (xedges[i] + xedges[i + 1]) / 2
+        bin_str = "{0: <8.4g}".format(bin_center).ljust(10)
+        count_str = f"({n[i]})"
+        print(f"{bin_str}| {bar} {count_str}")
+        
 def plot_deviation_histogram(hf_output, eqx_output, bins=20):
     # Calculate absolute differences
     diff = jnp.abs(eqx_output - hf_output)
@@ -55,3 +72,43 @@ def plot_deviation_histogram(hf_output, eqx_output, bins=20):
     print(f"- Max deviation: {np.max(diff_flat):.2e}")
     print(f"- Mean deviation: {np.mean(diff_flat):.2e}")
     print(f"- Median deviation: {np.median(diff_flat):.2e}")
+    
+def parse_path(path_str: str):
+    parts = []
+    
+    for component in path_str.split("."):
+        if "[" in component and component.endswith("]"):
+            attr_part, index_part = component.split("[")
+            index = int(index_part[:-1])
+            parts.append(attr_part)
+            parts.append(index)
+        else:
+            parts.append(component)
+            
+    return parts
+
+def get_hf_param(hf_model, path_str: str) -> Tensor:
+    parts = parse_path(path_str)
+    current = hf_model
+    
+    for part in parts:
+        if isinstance(part, int):
+            current = current[part]
+        else:
+            current = getattr(current, part)
+            
+    return current
+
+def create_where_func(path_str: str) -> Callable:
+    parts = parse_path(path_str)
+
+    def where_func(model):
+        current = model
+        for part in parts:
+            if isinstance(part, int):
+                current = current[part]
+            else:
+                current = getattr(current, part)
+        return current
+
+    return where_func
