@@ -1,8 +1,11 @@
 import math
+import numpy as np
 import jax.numpy as jnp
+import termplotlib as tpl
 from jaxtyping import Array, Float, Int
 
 # ruff: noqa: F722
+
 
 def sinusoids(length: int, channels: int) -> Float[Array, "length channels"]:
     """Sinusoidal positional embeddings."""
@@ -22,5 +25,33 @@ def shift_tokens_right(
     shifted = jnp.where(shifted == -100, pad_token_id, shifted)
     return shifted
 
+
 def causal_mask(seq_len: int) -> Float[Array, "1 1 s t"]:
-    return jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1) * jnp.finfo(jnp.float32).min
+    return (
+        jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1) * jnp.finfo(jnp.float32).min
+    )
+
+
+def plot_deviation_histogram(hf_output, eqx_output, bins=20):
+    # Calculate absolute differences
+    diff = jnp.abs(eqx_output - hf_output)
+    diff_flat = diff.ravel()
+
+    # Create histogram data
+    counts, bin_edges = np.histogram(diff_flat, bins=bins)
+
+    # Create the figure
+    fig = tpl.figure()
+    fig.hist(counts, bin_edges, orientation="horizontal", force_ascii=True)
+
+    print("\nDistribution of Deviations between HuggingFace and Equinox outputs")
+    print("Frequency →")
+    print("↓ Absolute Deviation")
+    fig.show()
+
+    # Print summary statistics
+    print("\nSummary Statistics:\n")
+    print(f"- Min deviation: {np.min(diff_flat):.2e}")
+    print(f"- Max deviation: {np.max(diff_flat):.2e}")
+    print(f"- Mean deviation: {np.mean(diff_flat):.2e}")
+    print(f"- Median deviation: {np.median(diff_flat):.2e}")

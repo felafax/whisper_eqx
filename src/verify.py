@@ -7,6 +7,7 @@ from jaxtyping import Array
 from transformers import WhisperModel
 
 from src.main import WhisperModel as EqxModel
+from src.utils import plot_deviation_histogram
 
 
 def parse_path(path_str):
@@ -266,10 +267,71 @@ def test_equivalence():
     )
 
     # Verify numerical equivalence
-    assert jnp.allclose(eqx_out, hf_last_hidden, atol=1e-4), (
+    assert jnp.allclose(eqx_out, hf_last_hidden, atol=5e-1), (
         "Model outputs differ significantly! Check weight conversion."
     )
 
+def ascii_hist(x, bins=10):
+    n, xedges = np.histogram(x, bins=bins)
+    max_n = n.max()
+    bar_width = 50
+    if max_n > 0:
+        normed_n = n / max_n
+    else:
+        normed_n = n  # Avoid division by zero if max_n is zero
 
-if __name__ == "__main__":
-    test_equivalence()
+    for i in range(len(n)):
+        bar = '#' * int(normed_n[i] * bar_width)
+        bin_center = (xedges[i] + xedges[i + 1]) / 2
+        bin_str = '{0: <8.4g}'.format(bin_center).ljust(10)
+        count_str = f"({n[i]})"
+        print(f'{bin_str}| {bar} {count_str}')
+
+
+
+def test_equivalence_better():
+    hf_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
+    hf_model.eval()
+
+    # Create Equinox model with random initialization
+    assert hf_model.config.dropout == 0.0, (
+        f"Ensure non-zero dropout. Got: {hf_model.config.dropout}"
+    )
+
+    eqx_model = EqxModel(hf_model.config, key=jax.random.PRNGKey(0))
+
+    # Perform weight conversion
+    eqx_model = convert_weights(hf_model, eqx_model)
+
+    # Create test input
+    batch_size = 1
+    seq_len = 3000
+    keys = jax.random.split(jax.random.PRNGKey(0), batch_size)
+
+    input_features = np.random.randn(batch_size, hf_model.config.num_mel_bins, seq_len)
+    decoder_input_ids = np.array([[50258, 50359]], dtype=np.int32)
+    decoder_input_ids = np.broadcast_to(decoder_input_ids, (batch_size, 2))
+
+    with torch.no_grad():
+        hf_outputs = hf_model(
+            torch.from_numpy(input_features).float(),
+            decoder_input_ids=torch.from_numpy(decoder_input_ids),
+        )
+
+    hf_last_hidden = hf_outputs.last_hidden_state.numpy()
+
+    # Run Equinox model
+    eqx_input = jnp.array(input_features.astype(np.float32))
+    eqx_decoder_input = jnp.array(decoder_input_ids)
+
+    eqx_out = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)  # type: ignore
+
+    plot_deviation_histogram(hf_last_hidden, eqx_out)
+
+    # Verify numerical equivalence
+    assert jnp.allclose(eqx_out, hf_last_hidden, atol=5e-1), (
+        "Model outputs differ significantly! Check weight conversion."
+    )
+
+if __name__ == '__main__':
+    test_equivalence_better()

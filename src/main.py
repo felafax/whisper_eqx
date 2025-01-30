@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from src.layers import FeedForward, Linear, MultiHeadAttention
-from src.utils import sinusoids
+from src.utils import causal_mask, sinusoids
 
 # ruff: noqa: F722
 
@@ -310,7 +310,8 @@ class WhisperModel(eqx.Module):
     ) -> Float[Array, "s d"]:
         enc_key, dec_key = jax.random.split(key)
         encoder_out = self.encoder(input_features, key=enc_key)
-        return self.decoder(decoder_input_ids, encoder_out, None, key=dec_key)
+        _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
+        return self.decoder(decoder_input_ids, encoder_out, _causal_mask, key=dec_key)
 
 
 class WhisperForConditionalGeneration(eqx.Module):

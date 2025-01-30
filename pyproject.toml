@@ -11,6 +11,7 @@ dependencies = [
     "jax>=0.5.0",
     "pdbpp>=0.10.3",
     "ruff>=0.9.3",
+    "termplotlib>=0.3.9",
     "torch>=2.5.1",
     "transformers>=4.48.1",
     "tree-sitter-python>=0.23.6",
