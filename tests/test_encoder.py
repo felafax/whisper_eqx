@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 import torch
 from jaxtyping import Array, PRNGKeyArray
-from transformers import WhisperModel
+from transformers import WhisperForConditionalGeneration
 
-from src.main import WhisperModel as EqxModel
+from src.main import EquinoxWhisperModel as EqxModel
 from src.verify import convert_weights
 
 KEY: PRNGKeyArray = jax.random.PRNGKey(0)
@@ -32,7 +32,9 @@ def diff(
 
 @pytest.fixture(scope="module")
 def models() -> tuple[torch.nn.Module, eqx.Module]:
-    hf_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
+    hf_model = WhisperForConditionalGeneration.from_pretrained(
+        "openai/whisper-tiny.en", attn_implementation="eager"
+    )
     hf_model.eval()
 
     # Create full Equinox model first
@@ -42,7 +44,7 @@ def models() -> tuple[torch.nn.Module, eqx.Module]:
     # Extract encoder from converted model
     eqx_encoder = eqx_full_model.encoder  # type: ignore
 
-    return hf_model, eqx_encoder
+    return hf_model.model.encoder, eqx_encoder
 
 
 def test_conv1(models):
@@ -59,7 +61,7 @@ def test_conv2(models):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(384, 3000)
 
-    hf_out = hf_model.encoder.conv2(dummy_input)
+    hf_out = hf_model.conv2(dummy_input)
     eq_out = eqx_encoder.conv2(jnp.array(dummy_input.numpy()))
 
     diff(eq_out, hf_out)
@@ -70,7 +72,7 @@ def test_self_attn_k_projection(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_k_proj = hf_model.encoder.layers[layer_idx].self_attn.k_proj
+    hf_k_proj = hf_model.layers[layer_idx].self_attn.k_proj
     eq_k_proj = eqx_encoder.layers[layer_idx].self_attn.k_proj
 
     hf_out = hf_k_proj(dummy_input)
@@ -84,7 +86,7 @@ def test_self_attn_v_projection(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_v_proj = hf_model.encoder.layers[layer_idx].self_attn.v_proj
+    hf_v_proj = hf_model.layers[layer_idx].self_attn.v_proj
     eq_v_proj = eqx_encoder.layers[layer_idx].self_attn.v_proj
 
     hf_out = hf_v_proj(dummy_input)
@@ -97,7 +99,7 @@ def test_ffn_output(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_layer = hf_model.encoder.layers[layer_idx]
+    hf_layer = hf_model.layers[layer_idx]
     eq_layer = eqx_encoder.layers[layer_idx]
 
     # HF forward
@@ -115,7 +117,7 @@ def test_self_attn_out_projection(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_out_proj = hf_model.encoder.layers[layer_idx].self_attn.out_proj
+    hf_out_proj = hf_model.layers[layer_idx].self_attn.out_proj
     eq_out_proj = eqx_encoder.layers[layer_idx].self_attn.out_proj
 
     hf_out = hf_out_proj(dummy_input)
@@ -134,7 +136,7 @@ def test_self_attn_full_forward(models, layer_idx: int):
     dummy_input = torch.randn(1, 6, 384)
 
     # HF MHA sub-layer
-    hf_self_attn = hf_model.encoder.layers[layer_idx].self_attn
+    hf_self_attn = hf_model.layers[layer_idx].self_attn
     # Equinox MHA sub-layer
     eq_self_attn = eqx_encoder.layers[layer_idx].self_attn
 
@@ -156,7 +158,7 @@ def test_self_attn_projection(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_layer = hf_model.encoder.layers[layer_idx].self_attn.q_proj
+    hf_layer = hf_model.layers[layer_idx].self_attn.q_proj
     eq_layer = eqx_encoder.layers[layer_idx].self_attn.q_proj
 
     hf_out = hf_layer(dummy_input)
@@ -170,7 +172,7 @@ def test_attention_layer_norm(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_ln = hf_model.encoder.layers[layer_idx].self_attn_layer_norm
+    hf_ln = hf_model.layers[layer_idx].self_attn_layer_norm
     eq_ln = eqx_encoder.layers[layer_idx].self_attn_layer_norm
 
     diff(eq_ln.weight, hf_ln.weight, f"Weight of ln: {layer_idx}")
@@ -187,7 +189,7 @@ def test_ffn(models, layer_idx: int):
     hf_model, eqx_encoder = models
     dummy_input = torch.randn(10, 384)
 
-    hf_ff = hf_model.encoder.layers[layer_idx].fc1
+    hf_ff = hf_model.layers[layer_idx].fc1
     eq_ff = eqx_encoder.layers[layer_idx].fc1
 
     hf_out = hf_ff(dummy_input)
@@ -202,7 +204,7 @@ def test_full_encoder(models):
     np.random.seed(0)
     dummy_input = torch.from_numpy(np.random.randn(1, 80, 3000).astype(np.float32))  # [num_mel_bins, time]
 
-    hf_out = hf_model.encoder(dummy_input).last_hidden_state
+    hf_out = hf_model(dummy_input).last_hidden_state
     eq_out = eqx_encoder(jnp.array(dummy_input.numpy().squeeze()), key=KEY)[None, ...]
 
-    diff(eq_out, hf_out)
+    diff(eq_out, hf_out, 'Full encoder test')

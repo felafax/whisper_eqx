@@ -293,46 +293,34 @@ class WhisperDecoder(eqx.Module):
         return jax.vmap(self.layer_norm)(x)
 
 
-class WhisperModel(eqx.Module):
+class EquinoxWhisperModel(eqx.Module):
     encoder: WhisperEncoder
     decoder: WhisperDecoder
-
-    def __init__(self, config, *, key):
-        enc_key, dec_key = jax.random.split(key)
-        self.encoder = WhisperEncoder(config, key=enc_key)
-        self.decoder = WhisperDecoder(config, key=dec_key)
-
-    def __call__(
-        self,
-        input_features: Float[Array, "f t"],
-        decoder_input_ids: Int[Array, " s"],
-        key: PRNGKeyArray,
-    ) -> Float[Array, "s d"]:
-        enc_key, dec_key = jax.random.split(key)
-        encoder_out = self.encoder(input_features, key=enc_key)
-        _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
-        return self.decoder(decoder_input_ids, encoder_out, _causal_mask, key=dec_key)
-
-
-class WhisperForConditionalGeneration(eqx.Module):
-    model: WhisperModel
     proj_out: Linear
 
-    def __init__(self, config, *, key):
-        model_key, proj_key = jax.random.split(key)
-        self.model = WhisperModel(config, key=model_key)
+    def __init__(self, config, *, key: PRNGKeyArray):
+        enc_key, dec_key, proj_key = jax.random.split(key, 3)
+        
+        self.encoder = WhisperEncoder(config, key=enc_key)
+        self.decoder = WhisperDecoder(config, key=dec_key)
+        
         self.proj_out = Linear(
             config.d_model, config.vocab_size, use_bias=False, key=proj_key
         )
 
     def __call__(
         self,
-        input_features: Float[Array, "b f t"],
-        decoder_input_ids: Int[Array, "b s"],
-        key,
-    ) -> Float[Array, "b s v"]:
-        decoder_out = self.model(input_features, decoder_input_ids, key=key)
-        return jax.vmap(self.proj_out)(decoder_out)
+        input_features: Float[Array, "f t"],
+        decoder_input_ids: Int[Array, " s"],
+        key: PRNGKeyArray,
+    ) -> Tuple[Array, Array]:
+        enc_key, dec_key = jax.random.split(key)
+        _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
+        
+        encoder_out = self.encoder(input_features, key=enc_key)
+        decoded_out = self.decoder(decoder_input_ids, encoder_out, _causal_mask, key=dec_key)
+
+        return self.proj_out(decoded_out), decoded_out
 
 
 class DecoderLayerWithCache(eqx.Module):

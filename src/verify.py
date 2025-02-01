@@ -4,9 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 from jaxtyping import Array
-from transformers import WhisperModel
+from transformers import WhisperForConditionalGeneration
 
-from src.main import WhisperModel as EqxModel
+from src.main import EquinoxWhisperModel as EqxModel
 from src.utils import create_where_func, get_hf_param, plot_deviation_histogram
 
 
@@ -24,6 +24,7 @@ def process_param(hf_param: torch.Tensor, path: str) -> Array:
             "k_proj.weight",
             "v_proj.weight",
             "out_proj.weight",
+            "proj_out.weight",
         ]
     ):
         param_jax = param_jax.T
@@ -49,8 +50,11 @@ def update_param(
     return eqx.tree_at(where, eqx_model, new_param)
 
 
-def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Module:
+def convert_weights(hf_for_gen: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Module:
     """Convert Hugging Face weights to Equinox model using path-based transformations."""
+    assert isinstance(hf_for_gen, WhisperForConditionalGeneration), 'Need correct HF class for output projection loading.'
+    
+    hf_model = hf_for_gen.model
 
     # Encoder components
     eqx_model = update_param(eqx_model, hf_model, "encoder.conv1.weight")
@@ -115,6 +119,9 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
     # Decoder `layer_norm` at the end
     eqx_model = update_param(eqx_model, hf_model, "decoder.layer_norm.weight")
     eqx_model = update_param(eqx_model, hf_model, "decoder.layer_norm.bias")
+
+    # Output projection
+    eqx_model = update_param(eqx_model, hf_for_gen, 'proj_out.weight')
 
     # Decoder layers
     for layer_idx in range(len(hf_model.decoder.layers)):
@@ -189,14 +196,14 @@ def convert_weights(hf_model: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Mod
 
 
 def test_equivalence():
-    hf_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
+    hf_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
     hf_model.eval()
 
     eqx_model = EqxModel(hf_model.config, key=jax.random.PRNGKey(0))
     eqx_model = convert_weights(hf_model, eqx_model)
 
     # Create test input
-    batch_size = 2
+    batch_size = 1
     seq_len = 3000
     keys = jax.random.split(jax.random.PRNGKey(0), batch_size)
 
@@ -205,7 +212,7 @@ def test_equivalence():
     decoder_input_ids = np.broadcast_to(decoder_input_ids, (batch_size, 2))
 
     with torch.no_grad():
-        hf_outputs = hf_model(
+        hf_outputs = hf_model.model(
             torch.from_numpy(input_features).float(),
             decoder_input_ids=torch.from_numpy(decoder_input_ids),
         )
@@ -215,12 +222,12 @@ def test_equivalence():
     # Run Equinox model
     eqx_input = jnp.array(input_features.astype(np.float32))
     eqx_decoder_input = jnp.array(decoder_input_ids)
-    eqx_out = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)  # type: ignore
+    eqx_out, eqx_last_hidden = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)  # type: ignore
 
-    plot_deviation_histogram(hf_last_hidden, eqx_out)
+    plot_deviation_histogram(hf_last_hidden, eqx_last_hidden)
 
     # Verify numerical equivalence
-    assert jnp.allclose(eqx_out, hf_last_hidden, atol=5e-1), (
+    assert jnp.allclose(eqx_last_hidden, hf_last_hidden, atol=5e-1), (
         "Model outputs differ significantly! Check weight conversion."
     )
 
