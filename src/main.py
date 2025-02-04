@@ -145,9 +145,12 @@ class WhisperEncoder(eqx.Module):
 
         self.dropout = config.dropout
 
+    @eqx.filter_jit
     def __call__(
         self,
         input_features: Float[Array, "c t"],  # [channels, time]
+        attn_mask: Array | None = None,
+        *,
         key: PRNGKeyArray,
     ) -> Float[Array, "t d"]:
         key1, key2 = jax.random.split(key)
@@ -162,7 +165,7 @@ class WhisperEncoder(eqx.Module):
         hidden_states = eqx.nn.Dropout(self.dropout)(hidden_states, key=key1)
 
         for layer in self.layers:
-            hidden_states = layer(hidden_states, attn_mask=None, key=key2)
+            hidden_states = layer(hidden_states, attn_mask=attn_mask, key=key2)
 
         return jax.vmap(self.layer_norm)(hidden_states)
 
@@ -270,12 +273,12 @@ class WhisperDecoder(eqx.Module):
         self.layer_norm = eqx.nn.LayerNorm(config.d_model, use_weight=True, use_bias=True)
         self.dropout = config.dropout
 
+    @eqx.filter_jit
     def __call__(
         self,
         input_ids: Int[Array, " s"],
         encoder_hidden_states: Float[Array, "s d"],
         attention_mask: Optional[Float[Array, "1 s s"]],
-        *,
         key,
     ) -> Float[Array, "s d"]:
         keys = jax.random.split(key, 2)
@@ -312,13 +315,21 @@ class EquinoxWhisperModel(eqx.Module):
         self,
         input_features: Float[Array, "f t"],
         decoder_input_ids: Int[Array, " s"],
+        attn_mask: Optional[Array] = None,
+        *,
         key: PRNGKeyArray,
     ) -> Tuple[Array, Array]:
         enc_key, dec_key = jax.random.split(key)
-        _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
+        
+        if attn_mask is None:
+            _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
+        else:
+            _causal_mask = attn_mask
         
         encoder_out = self.encoder(input_features, key=enc_key)
-        decoded_out = self.decoder(decoder_input_ids, encoder_out, _causal_mask, key=dec_key)
+        decoded_out = self.decoder(
+            decoder_input_ids, encoder_out, _causal_mask, key=dec_key
+        )
 
         return self.proj_out(decoded_out), decoded_out
 

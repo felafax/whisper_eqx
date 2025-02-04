@@ -1,10 +1,10 @@
 import math
-import numpy as np
-import jax.numpy as jnp
-import termplotlib as tpl
-
-from jaxtyping import Array, Float, Int
 from typing import Callable
+
+import jax.numpy as jnp
+import numpy as np
+import termplotlib as tpl
+from jaxtyping import Array, Float, Int
 from torch import Tensor
 
 # ruff: noqa: F722
@@ -27,11 +27,19 @@ def shift_tokens_right(
     shifted = jnp.where(shifted == -100, pad_token_id, shifted)
     return shifted
 
+def causal_mask(seq_len: int, padding_mask: Array) -> Float[Array, "1 1 s t"]:
+    """
+    Create a causal mask from provided `seq_len` and also incorporate `padding_mask`
+    to prevent attention going to padding tokens.
+    """
+    min_dtype = jnp.finfo(jnp.float32).min
+    padding_mask = jnp.ones(padding_mask.shape[0])[:, None] @ padding_mask[:, None].T
+    padding_mask = jnp.broadcast_to(padding_mask, (1, 1, seq_len, seq_len))
 
-def causal_mask(seq_len: int) -> Float[Array, "1 1 s t"]:
-    return (
-        jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1) * jnp.finfo(jnp.float32).min
-    )
+    causal_mask = jnp.triu(jnp.ones((1, 1, seq_len, seq_len)), k=1)
+    full_mask = jnp.where(padding_mask * (1 - causal_mask) == 1, -0.0, min_dtype)
+
+    return full_mask
 
 def ascii_hist(x: Array, bins: int = 10):
     n, xedges = np.histogram(x, bins=bins)

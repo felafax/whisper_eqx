@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -9,6 +11,7 @@ from transformers import WhisperForConditionalGeneration
 from src.main import EquinoxWhisperModel as EqxModel
 from src.utils import create_where_func, get_hf_param, plot_deviation_histogram
 
+T = TypeVar('T')
 
 def process_param(hf_param: torch.Tensor, path: str) -> Array:
     param_np = hf_param.detach().numpy().astype(np.float32)
@@ -50,9 +53,10 @@ def update_param(
     return eqx.tree_at(where, eqx_model, new_param)
 
 
-def convert_weights(hf_for_gen: torch.nn.Module, eqx_model: eqx.Module) -> eqx.Module:
+def convert_weights(hf_for_gen: torch.nn.Module, eqx_model: T) -> T:
     """Convert Hugging Face weights to Equinox model using path-based transformations."""
     assert isinstance(hf_for_gen, WhisperForConditionalGeneration), 'Need correct HF class for output projection loading.'
+    assert isinstance(eqx_model, EqxModel), 'Provide generator for correct porting.'
     
     hf_model = hf_for_gen.model
 
