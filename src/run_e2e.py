@@ -5,7 +5,7 @@ from datasets import load_dataset
 from transformers import WhisperForConditionalGeneration, WhisperModel, WhisperProcessor
 
 from src.generate import EquinoxWhisperGenerator
-from src.main import EquinoxWhisperModel as EqxModel
+from src.modelling import EquinoxWhisperModel as EqxModel
 from src.verify import convert_weights
 
 
@@ -13,7 +13,7 @@ def test_e2e():
     ds = load_dataset(
         "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
     )
-    audio_sample = ds[1]["audio"]
+    audio_sample = ds[0]["audio"]
 
     processor = WhisperProcessor.from_pretrained("openai/whisper-tiny.en")
     hf_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
@@ -40,5 +40,7 @@ def test_e2e():
     eqx_decoded = processor.batch_decode([eqx_generated.tolist()], skip_special_tokens=True)
     print(f'Equinox model output: {eqx_decoded} | Generated: {eqx_generated}')
 
+    assert eqx_decoded == hf_decoded, "Outputs don't match up!"
+    
 if __name__ == '__main__':
     test_e2e()

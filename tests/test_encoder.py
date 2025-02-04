@@ -7,7 +7,7 @@ import torch
 from jaxtyping import Array, PRNGKeyArray
 from transformers import WhisperForConditionalGeneration
 
-from src.main import EquinoxWhisperModel as EqxModel
+from src.modelling import EquinoxWhisperModel as EqxModel
 from src.verify import convert_weights
 
 KEY: PRNGKeyArray = jax.random.PRNGKey(0)

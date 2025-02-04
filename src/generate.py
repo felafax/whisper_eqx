@@ -5,7 +5,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 from tqdm import tqdm
 from transformers import GenerationConfig
 
-from src.main import EquinoxWhisperModel
+from src.modelling import EquinoxWhisperModel
 from src.utils import causal_mask
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/whisper_eqx_cache")

@@ -7,8 +7,8 @@ import torch
 from jaxtyping import Array, PRNGKeyArray
 from transformers import WhisperForConditionalGeneration
 
-from src.main import EquinoxWhisperModel as EqxModel
-from src.utils import causal_mask
+from src.modelling import EquinoxWhisperModel as EqxModel
+from src.utils import causal_mask, plot_deviation_histogram
 from src.verify import convert_weights
 
 KEY: PRNGKeyArray = jax.random.PRNGKey(0)
@@ -340,7 +340,8 @@ def test_full_decoder(decoder_models):
     eqx_out = jax.vmap(eqx_model)(
         jnp.array(input_ids.numpy()),
         jnp.array(dummy_encoder.numpy()),
-        causal_mask(seq_len),
+        causal_mask(seq_len, jnp.ones(seq_len)),
         key=jax.random.split(KEY, 1),
     )
+
     diff(eqx_out, hf_out, "full decoder output")

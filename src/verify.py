@@ -8,7 +8,7 @@ import torch
 from jaxtyping import Array
 from transformers import WhisperForConditionalGeneration
 
-from src.main import EquinoxWhisperModel as EqxModel
+from src.modelling import EquinoxWhisperModel as EqxModel
 from src.utils import create_where_func, get_hf_param, plot_deviation_histogram
 
 T = TypeVar('T')
@@ -226,7 +226,7 @@ def test_equivalence():
     # Run Equinox model
     eqx_input = jnp.array(input_features.astype(np.float32))
     eqx_decoder_input = jnp.array(decoder_input_ids)
-    eqx_out, eqx_last_hidden = eqx.filter_vmap(eqx_model)(eqx_input, eqx_decoder_input, keys)  # type: ignore
+    eqx_out, eqx_last_hidden = jax.vmap(eqx_model)(eqx_input, eqx_decoder_input, key=keys)  # type: ignore
 
     plot_deviation_histogram(hf_last_hidden, eqx_last_hidden)
 

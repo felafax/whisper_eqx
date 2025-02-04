@@ -322,7 +322,8 @@ class EquinoxWhisperModel(eqx.Module):
         enc_key, dec_key = jax.random.split(key)
         
         if attn_mask is None:
-            _causal_mask = causal_mask(decoder_input_ids.shape[0]).squeeze()
+            seqlen = decoder_input_ids.shape[0]
+            _causal_mask = causal_mask(seqlen, jnp.ones(seqlen)).squeeze()
         else:
             _causal_mask = attn_mask
         
